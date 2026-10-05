@@ -1,0 +1,44 @@
+# --- Compilación (CMake / Visual Studio) ---
+build/
+build32/
+build*/
+out/
+dist/
+.vs/
+.vscode/
+CMakeSettings.json
+CMakeUserPresets.json
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.ipch
+ipch/
+
+# --- Binarios generados ---
+*.dll
+*.exe
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.obj
+*.o
+*.res
+*.zip
+
+# --- Archivos de ejecución del mod (se generan en la carpeta del juego) ---
+*.log
+OutlastOnline.ini
+steam_appid.txt
+
+# --- Python / herramientas de análisis ---
+__pycache__/
+*.pyc
+
+# --- Sistema ---
+Thumbs.db
+desktop.ini
+.DS_Store

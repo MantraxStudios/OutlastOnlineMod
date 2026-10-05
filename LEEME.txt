@@ -1,0 +1,65 @@
+OUTLAST ONLINE - mod multijugador para Outlast (Steam / PC, 32 y 64 bits)
+===================================================================
+
+COMO JUGAR
+1. Descomprime esta carpeta donde quieras.
+2. Abre OutlastOnlineLauncher.exe.
+   - Busca Outlast automaticamente (Steam, GOG, Epic y rutas habituales) y guarda la ruta.
+   - Instala o actualiza el mod y abre el juego.
+   - Si no lo encuentra, pulsa "Cambiar carpeta..." y elige la carpeta de Outlast
+     (la que contiene la carpeta Binaries).
+   - El boton "Version: 64 bits / 32 bits" elige que version del juego abrir. El mod se instala
+     en las dos, asi que tambien funciona si abres Outlast desde Steam.
+   - Los jugadores de 32 y 64 bits pueden jugar juntos en la misma partida.
+3. Dentro del juego:
+     F9   Menu de conexion: nombre, IP y puerto -> Unirse o Hospedar partida
+     F8   Hospedar rapidamente
+     F10  Desconectar
+     F11  Ir junto a tu companero
+     T    Chat de texto
+     M    Microfono ON/OFF (chat de voz por proximidad)
+     F7   Mostrar u ocultar el texto del mod
+
+MODO HISTORIA COOPERATIVO
+- Entrad todos en la misma partida (uno hospeda y los demas se unen con F9).
+- Cuando alguien llega a un checkpoint mas avanzado, los demas cargan ese checkpoint
+  automaticamente. Nadie retrocede.
+- Por ahora solo se sincronizan los jugadores y el avance por checkpoints. Los enemigos,
+  las puertas y los objetos son de cada jugador.
+
+CHAT DE VOZ POR PROXIMIDAD
+- Pulsa M para encender o apagar tu microfono. El icono de abajo a la izquierda muestra:
+  gris tachado = apagado, blanco = encendido, verde = transmitiendo (te estan oyendo).
+- Solo transmite cuando hablas. A los demas solo se les oye si estan cerca (a unos 25 m dejan
+  de oirse) y en el mismo mapa, en estereo segun hacia donde esten.
+- Junto al nombre de quien habla aparece  <))
+- ELEGIR MICROFONO: pulsa F9, baja hasta "Microfono" y cambialo con las flechas izquierda/derecha.
+  Se guarda solo. Con el micro encendido veras un medidor [||||....] para comprobar que te capta.
+- Usa auriculares para evitar eco.
+- Opciones en el ini: VoiceChat, VoiceRange (metros), VoiceSensitivity (mas bajo = mas sensible),
+  MicDevice.
+
+JUGAR POR INTERNET
+- Quien hospeda debe abrir o redirigir el puerto UDP 7777 en su router y permitir
+  Outlast en el firewall de Windows (acepta el aviso la primera vez que hospedes).
+- Si no podeis abrir puertos, usad una VPN LAN (Radmin VPN, ZeroTier, Tailscale o Hamachi)
+  y conectaos a la IP que os de.
+
+CONFIGURACION
+Outlast\Binaries\OutlastOnline.ini   (compartido por las versiones de 32 y 64 bits)
+  SyncLevels=1      sincronizar el avance por checkpoints (0 = desactivado)
+  SyncSaveToDisk=1  guardar en tu partida el checkpoint sincronizado
+  AutoStart=0/1/2   manual / hospedar al arrancar / unirse al arrancar
+El registro esta en Outlast\Binaries\Win64\OutlastOnline.log (o Win32 en la version de 32 bits).
+
+INSTALACION MANUAL (sin launcher)
+Copia manual\Win64\dinput8.dll en Outlast\Binaries\Win64\ y manual\Win32\dinput8.dll en
+Outlast\Binaries\Win32\, y abre el juego normalmente.
+
+DESINSTALAR
+Pulsa "Desinstalar mod" en el launcher, o borra dinput8.dll de Outlast\Binaries\Win64 y Win32.
+
+PRUEBAS
+tools\fakepeer.exe simula un segundo jugador para probar sin otro PC:
+  fakepeer join 127.0.0.1 7777   (en el juego pulsa F8)
+  fakepeer host 7777             (en el juego pulsa F9 -> 127.0.0.1 -> Unirse)
