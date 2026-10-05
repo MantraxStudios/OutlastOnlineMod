@@ -164,7 +164,8 @@ struct Refs {
     UFunction* StartAtCheckpoint;
     int oCurCheckpoint, oWorldInfo, oGame, oTravelling;
     uint32_t mTravelling;
-    std::vector<int> checkpointOrder;  // índices FName en orden de la historia
+    std::vector<std::vector<int>> checkpointLists;  // una lista por campaña (historia, Whistleblower)
+    std::vector<int> checkpointOrder;  // (compatibilidad) la lista más larga
 };
 static Refs R{};
 
@@ -333,6 +334,15 @@ static bool ResolveRefs() {
             LOG("  OLCheckpointList %s: %d", G.GetPath(o).c_str(), num);
             if (!bestList || num > At<TArray<FName>>(bestList, oList).Num) bestList = o;
         }
+        for (int i = 0, n = G.ObjCount(); i < n; ++i) {
+            UObject* o = G.Obj(i);
+            if (!o || !G.IsA(o, listCls) || (At<uint64_t>(o, off::ObjectFlags) & RF_ClassDefaultObject)) continue;
+            auto& arr = At<TArray<FName>>(o, oList);
+            if (arr.Num <= 0) continue;
+            std::vector<int> v;
+            for (int k = 0; k < arr.Num; ++k) v.push_back(arr.Data[k].Index);
+            R.checkpointLists.push_back(v);
+        }
         if (bestList) {
             auto& arr = At<TArray<FName>>(bestList, oList);
             for (int i = 0; i < arr.Num; ++i) R.checkpointOrder.push_back(arr.Data[i].Index);
@@ -394,6 +404,58 @@ static UObject* SpawnActor(UClass* cls, const FVector& loc, const FRotator& rot)
 }
 
 static void DumpObject(UObject* o, const char* tag);
+// Mueve un componente adjunto al ShadowProxy (esqueleto oculto que no se agacha) al cuerpo visible,
+// en el mismo hueso y con el mismo desplazamiento relativo.
+static void ReattachToBody(UObject* a, UObject* comp) {
+    UClass* cls = At<UClass*>(a, off::Class);
+    int oProxy = G.PropOff(cls, "ShadowProxy");
+    UObject* proxy = oProxy >= 0 ? At<UObject*>(a, oProxy) : nullptr;
+    UObject* body = R.oMesh >= 0 ? At<UObject*>(a, R.oMesh) : nullptr;
+    UFunction* attach = R.SkelComp ? G.FindFunction(R.SkelComp, "AttachComponent") : nullptr;
+    UFunction* detach = R.SkelComp ? G.FindFunction(R.SkelComp, "DetachComponent") : nullptr;
+    UObject* attStruct = G.FindObject("ScriptStruct", "Engine.SkeletalMeshComponent.Attachment");
+    if (!comp || !body || !attach || !detach || !attStruct) return;
+
+    FName bone{-1, 0};
+    FVector relLoc{};
+    FRotator relRot{};
+    FVector relScale{1, 1, 1};
+    UObject* parent = nullptr;
+    // Buscar dónde está adjunto ahora (ShadowProxy o el propio cuerpo)
+    int oAtt = G.PropOff(R.SkelComp, "Attachments");
+    int size = At<int>(attStruct, off::PropertiesSize);
+    int oComp = G.PropOff(attStruct, "Component"), oBone = G.PropOff(attStruct, "BoneName");
+    int oLoc = G.PropOff(attStruct, "RelativeLocation"), oRot = G.PropOff(attStruct, "RelativeRotation");
+    int oScale = G.PropOff(attStruct, "RelativeScale");
+    for (UObject* owner : {proxy, body}) {
+        if (!owner || oAtt < 0 || parent) continue;
+        auto& arr = At<TArray<uint8_t>>(owner, oAtt);
+        for (int i = 0; i < arr.Num; ++i) {
+            uint8_t* e = arr.Data + i * size;
+            if (At<UObject*>(e, oComp) != comp) continue;
+            parent = owner;
+            bone = At<FName>(e, oBone);
+            relLoc = At<FVector>(e, oLoc);
+            relRot = At<FRotator>(e, oRot);
+            if (oScale >= 0) relScale = At<FVector>(e, oScale);
+            break;
+        }
+    }
+    if (!parent) {
+        LOG("ReattachToBody: %s no esta adjunto a ningun esqueleto", G.GetName(comp).c_str());
+        return;
+    }
+    if (parent == body) return;  // ya está en el cuerpo
+    Params d(detach);
+    d.Set("Component", comp);
+    G.Call(parent, detach, d.Data());
+    Params p(attach);
+    p.Set("Component", comp).Set("BoneName", bone).Set("RelativeLocation", relLoc).Set("RelativeRotation", relRot)
+        .Set("RelativeScale", relScale);
+    G.Call(body, attach, p.Data());
+    LOG("%s adjunto al cuerpo en el hueso %s", G.GetName(comp).c_str(), G.NameStr(bone).c_str());
+}
+
 static UObject* SpawnAvatarActor(const FVector& loc, const FRotator& rot) {
     UObject* pawn = LocalPawn();
     UObject* a = nullptr;
@@ -422,6 +484,12 @@ static UObject* SpawnAvatarActor(const FVector& loc, const FRotator& rot) {
             // StaticMeshComponent aparte (OLHero.HeadMesh) que sólo proyecta sombra. La mostramos.
             int oHead = G.PropOff(cls, "HeadMesh");
             UObject* head = oHead >= 0 ? At<UObject*>(a, oHead) : nullptr;
+            if (head) ReattachToBody(a, head);
+            {
+                int oCam = G.PropOff(cls, "CameraMesh");
+                UObject* cam = oCam >= 0 ? At<UObject*>(a, oCam) : nullptr;
+                if (cam) ReattachToBody(a, cam);
+            }
             if (head && R.SetCompHidden) {
                 Params h(R.SetCompHidden);
                 h.SetBool("NewHidden", false);
@@ -609,6 +677,8 @@ static void HandleKey(int vk) {
 // Sincronización de animaciones
 // ---------------------------------------------------------------------------
 // Variables del personaje (OLPawn/OLHero/Pawn) que mueven el árbol de animación.
+// OJO: escribir CamcorderState/CamcorderMode/BodySetup en el avatar hace que OLHero ejecute código nativo
+// de la cámara que necesita controlador/inventario -> crash. Esas se envían pero NO se aplican (ver kApplyByte).
 static const char* kSyncByteNames[proto::kSyncBytes] = {
     "LocomotionMode", "SpecialMove", "CamcorderState", "CamcorderMode", "BodySetup", "LedgeClimbType",
     "SqueezeTransitionType", "ActiveLedgeTransitionType", "DoorOpeningType", "DoorPartialOpenType",
@@ -617,6 +687,10 @@ static const char* kSyncBoolNames[] = {"bPlayingSpecialMoveAnim", "bCamcorderDes
                                        "bJumping", "bIsCrouched", "bWantsToCrouch", "bLeaningLeftPushing",
                                        "bLeaningRightPushing", "bForcedCrouch", "bPickupCrouched"};
 static constexpr int kSyncBools = sizeof(kSyncBoolNames) / sizeof(kSyncBoolNames[0]);
+// Índices de kSyncByteNames / kSyncBoolNames que es seguro escribir en el avatar
+static const bool kApplyByte[proto::kSyncBytes] = {true, true, false, false, false, true, true, true, true, true, true, true};
+static const bool kApplyBool[kSyncBools] = {true, false, false, true, true, true, true, true, true, true};
+constexpr int kByteCamcorderState = 2;
 static const char* kSyncFloatNames[proto::kSyncFloats] = {"CurrentLean", "SpecialMoveBlendAlpha"};
 static const char* kSlotNames[proto::kAnimSlots] = {"FullBodyAnimSlot", "RightArmAnimSlot", "LeftArmAnimSlot"};
 
@@ -703,6 +777,7 @@ static FName MakeName(const std::string& s) {
 struct AvatarAnim {
     uint8_t serial[proto::kAnimSlots] = {};
     bool playing[proto::kAnimSlots] = {};
+    bool camVisible = false;
 };
 static AvatarAnim g_avatarAnim[proto::kMaxPlayers];
 
@@ -710,17 +785,29 @@ static void ApplyAnimState(int id, UObject* a, const proto::MsgState& s, double 
     UClass* cls = At<UClass*>(a, off::Class);
     const SyncTable& t = Sync(cls);
     for (int i = 0; i < proto::kSyncBytes; ++i)
-        if (t.byteOff[i] >= 0) At<uint8_t>(a, t.byteOff[i]) = s.syncBytes[i];
+        if (kApplyByte[i] && t.byteOff[i] >= 0) At<uint8_t>(a, t.byteOff[i]) = s.syncBytes[i];
     for (int i = 0; i < kSyncBools; ++i)
-        if (t.boolOff[i] >= 0) {
+        if (kApplyBool[i] && t.boolOff[i] >= 0) {
             uint32_t& w = At<uint32_t>(a, t.boolOff[i]);
             w = (s.syncBools & (1u << i)) ? (w | t.boolMask[i]) : (w & ~t.boolMask[i]);
         }
     for (int i = 0; i < proto::kSyncFloats; ++i)
         if (t.floatOff[i] >= 0) At<float>(a, t.floatOff[i]) = s.syncFloats[i];
 
-    if (!R.PlayCustomAnim) return;
+    // Videocámara visible mientras el otro jugador la usa (CamcorderState 1 = en uso, 2 = sacándola)
     AvatarAnim& st = g_avatarAnim[id];
+    bool camUp = s.syncBytes[kByteCamcorderState] == 1 || s.syncBytes[kByteCamcorderState] == 2;
+    if (camUp != st.camVisible && R.SetCompHidden) {
+        int oCam = G.PropOff(cls, "CameraMesh");
+        UObject* cam = oCam >= 0 ? At<UObject*>(a, oCam) : nullptr;
+        if (cam) {
+            Params h(R.SetCompHidden);
+            h.SetBool("NewHidden", !camUp);
+            G.Call(cam, R.SetCompHidden, h.Data());
+        }
+        st.camVisible = camUp;
+    }
+    if (!R.PlayCustomAnim) return;
     for (int i = 0; i < proto::kAnimSlots; ++i) {
         UObject* slot = t.slotOff[i] >= 0 ? At<UObject*>(a, t.slotOff[i]) : nullptr;
         if (!slot) continue;
@@ -818,12 +905,14 @@ static std::string LocalCheckpoint() {
     return n == "None" ? "" : n;
 }
 
-// Posición del checkpoint en la historia (-1 si no se conoce)
+// Posición del checkpoint en su campaña: lista*1000 + índice (-1 si no se conoce).
+// Solo se comparan checkpoints de la misma campaña (historia principal o Whistleblower).
 static int CheckpointRank(const std::string& name) {
     if (name.empty()) return -1;
     int idx = G.NameIndex(name.c_str());
-    for (size_t i = 0; i < R.checkpointOrder.size(); ++i)
-        if (R.checkpointOrder[i] == idx) return (int)i;
+    for (size_t l = 0; l < R.checkpointLists.size(); ++l)
+        for (size_t i = 0; i < R.checkpointLists[l].size(); ++i)
+            if (R.checkpointLists[l][i] == idx) return (int)(l * 1000 + i);
     return -1;
 }
 
@@ -866,7 +955,9 @@ static void SyncLevels() {
         std::string cp(r.state.checkpoint, strnlen(r.state.checkpoint, sizeof(r.state.checkpoint)));
         if (cp.empty() || cp == g_checkpoint) continue;
         int rank = CheckpointRank(cp);
-        bool ahead = rank >= 0 ? rank > bestRank : (R.checkpointOrder.empty() && i == 0);
+        // misma campaña (o no tengo checkpoint aún) y más avanzado
+        bool sameCampaign = bestRank < 0 || (rank >= 0 && rank / 1000 == bestRank / 1000);
+        bool ahead = rank >= 0 ? (sameCampaign && rank > bestRank) : (R.checkpointLists.empty() && i == 0);
         if (ahead) {
             best = cp;
             bestWho = r.name;

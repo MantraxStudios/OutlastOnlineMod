@@ -147,6 +147,15 @@ int main(int argc, char** argv) {
                 m.flags = FlagHasPawn;
             }
             strcpy_s(m.map, anchor.map);
+            if (getenv("FAKEPEER_CAM")) {  // simula que el bot saca la videocámara (CamcorderState=1, BodySetup=2)
+                m.syncBytes[2] = 1;
+                m.syncBytes[4] = 2;
+                m.syncBools |= 2;  // bCamcorderDesired
+            }
+            if (getenv("FAKEPEER_CROUCH")) {  // simula que el bot está agachado
+                m.flags |= FlagCrouched;
+                m.syncBools |= (1u << 4) | (1u << 5);  // bIsCrouched, bWantsToCrouch
+            }
             if (getenv("FAKEPEER_MIRROR")) {  // copiar el estado de animación del jugador real
                 memcpy(m.syncBytes, anchor.syncBytes, sizeof(m.syncBytes));
                 m.syncBools = anchor.syncBools;
